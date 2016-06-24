@@ -61,11 +61,11 @@ try(SV* body, ...)
 	for (index = 1; index < items; index++) {
 		SV* item = ST(index);
 
-		if (sv_isa(item, "Try::Tiny::Catch")) {
+		if (sv_isa(item, "Try::Tiny::XS::Catch")) {
 			catch = SvRV(item);
 			continue;
 		}
-		if (sv_isa(item, "Try::Tiny::Finally")) {
+		if (sv_isa(item, "Try::Tiny::XS::Finally")) {
 			Newx(finally[nfinally], 1, struct finally);
 			finally[nfinally]->code = SvRV(item);
 			finally[nfinally]->error = NULL;
@@ -102,4 +102,30 @@ try(SV* body, ...)
 	}
 
 	LEAVE;
+	PUTBACK;
+
+void
+catch(SV* body, ...)
+	PROTOTYPE: &;@
+	INIT:
+	SV* blessed;
+	HV* package;
+	PPCODE:
+	SP += items;
+	package = gv_stashpv("Try::Tiny::XS::Catch", GV_ADD);
+	blessed = sv_bless(newRV_inc(body), package);
+	ST(0) = sv_2mortal(blessed);
+	PUTBACK;
+
+void
+finally(SV* body, ...)
+	PROTOTYPE: &;@
+	INIT:
+	SV* blessed;
+	HV* package;
+	PPCODE:
+	SP += items;
+	package = gv_stashpv("Try::Tiny::XS::Finally", GV_ADD);
+	blessed = sv_bless(newRV_inc(body), package);
+	ST(0) = sv_2mortal(blessed);
 	PUTBACK;

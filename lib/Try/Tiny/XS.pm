@@ -3,7 +3,6 @@ use strict;
 use warnings;
 use XSLoader;
 use Exporter "import";
-use Try::Tiny qw/catch finally/;
 
 our @EXPORT = qw/try catch finally/;
 
