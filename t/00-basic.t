@@ -2,9 +2,7 @@ use strict;
 use warnings;
 use Test::More;
 
-BEGIN {
-    use_ok("Try::Tiny::XS");
-}
+use Try::Tiny::XS;
 
 my $called;
 my $caught;

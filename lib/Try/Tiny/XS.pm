@@ -2,9 +2,10 @@ package Try::Tiny::XS 0.01;
 use strict;
 use warnings;
 use XSLoader;
-use Exporter "import";
 
-our @EXPORT = qw/try catch finally/;
+sub import {
+    $^H{"Try::Tiny::XS/enabled"} = 1;
+}
 
 XSLoader::load();
 
