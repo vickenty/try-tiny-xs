@@ -34,12 +34,13 @@ sub bench_pp {
 sub bench_xs {
     my $die = shift;
     my $x = 0;
+    use Try::Tiny::XS;
     foreach my $c (0..100000) {
-        Try::Tiny::XS::try(sub {
+        try {
             $die and die "oh well";
-        }, Try::Tiny::XS::catch(sub {
+        } catch {
             $x++;
-        }));
+        }
     }
 }
 
