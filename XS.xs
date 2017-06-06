@@ -111,7 +111,6 @@ static OP *S_newRESET(pTHX_ PADOFFSET targ) {
 
 #define newRESET(a) S_newRESET(aTHX_ a)
 
-
 /* CATCH
  *
  * Prepare to execute catch block. Push $@ value to the stack and restore $@ to
@@ -378,7 +377,6 @@ static int keyword_plugin(pTHX_ char *kw, STRLEN kwlen, OP **op_out) {
 				catch = newOP(OP_UNDEF, 0);
 			}
 		}
-
 
 		OP *eval = newUNOP(OP_ENTERTRY, 0, newSUCCESS(success, body));
 		OP *catch_maybe = newBRANCH(success, eval, catch);
