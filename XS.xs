@@ -81,6 +81,30 @@ static OP *S_newPREPARE(pTHX_ PADOFFSET preverr) {
 
 #define newPREPARE(a) S_newPREPARE(aTHX_ a)
 
+/* RESET
+ *
+ * Reset the success flag to false.
+ */
+
+static XOP xop_reset;
+
+static OP *xop_reset_impl(pTHX) {
+	dTARGET;
+	sv_setsv(TARG, NULL);
+	return NORMAL;
+}
+
+static OP *S_newRESET(pTHX_ PADOFFSET targ) {
+	OP *op = newOP(OP_NULL, 0);
+	op->op_type = OP_CUSTOM;
+	op->op_ppaddr = xop_reset_impl;
+	op->op_targ = targ;
+	return op;
+}
+
+#define newRESET(a) S_newRESET(aTHX_ a)
+
+
 /* CATCH
  *
  * Prepare to execute catch block. Push $@ value to the stack and restore $@ to
@@ -107,30 +131,6 @@ static OP *S_newCATCH(pTHX_ PADOFFSET preverr) {
 }
 
 #define newCATCH(a) S_newCATCH(aTHX_ a)
-
-/* RESET
- *
- * Reset the success flag to false.
- */
-
-static XOP xop_reset;
-
-static OP *xop_reset_impl(pTHX) {
-	dTARGET;
-	sv_setsv(TARG, NULL);
-	return NORMAL;
-}
-
-static OP *S_newRESET(pTHX_ PADOFFSET targ) {
-	OP *op = newOP(OP_NULL, 0);
-	op->op_type = OP_CUSTOM;
-	op->op_ppaddr = xop_reset_impl;
-	op->op_targ = targ;
-	return op;
-}
-
-#define newRESET(a) S_newRESET(aTHX_ a)
-
 
 /* RESTORE
  *
