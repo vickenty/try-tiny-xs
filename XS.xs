@@ -66,9 +66,9 @@ static OP *S_newBRANCH(pTHX_ PADOFFSET target, OP *first, OP *other) {
  * Target points to a location to save $@ to.
  */
 
-static XOP xop_prepare;
+static XOP xop_prepare_try;
 
-static OP *xop_prepare_impl(pTHX) {
+static OP *xop_prepare_try_impl(pTHX) {
 	dTARGET;
 	sv_setsv(TARG, ERRSV);
 	save_scalar(PL_errgv);
@@ -76,15 +76,15 @@ static OP *xop_prepare_impl(pTHX) {
 	return NORMAL;
 }
 
-static OP *S_newPREPARE(pTHX_ PADOFFSET preverr) {
+static OP *S_newPREPARE_TRY(pTHX_ PADOFFSET preverr) {
 	OP *op = newOP(OP_NULL, 0);
 	op->op_type = OP_CUSTOM;
-	op->op_ppaddr = xop_prepare_impl;
+	op->op_ppaddr = xop_prepare_try_impl;
 	op->op_targ = preverr;
 	return op;
 }
 
-#define newPREPARE(a) S_newPREPARE(aTHX_ a)
+#define newPREPARE_TRY(a) S_newPREPARE_TRY(aTHX_ a)
 
 /* RESET
  *
@@ -119,9 +119,9 @@ static OP *S_newRESET(pTHX_ PADOFFSET targ) {
  * Target points to previously saved $@ value.
  */
 
-static XOP xop_catch;
+static XOP xop_prepare_catch;
 
-static OP *xop_catch_impl(pTHX) {
+static OP *xop_prepare_catch_impl(pTHX) {
 	dSP;
 	dTARGET;
 	mXPUSHs(newSVsv(ERRSV));
@@ -130,15 +130,15 @@ static OP *xop_catch_impl(pTHX) {
 	return NORMAL;
 }
 
-static OP *S_newCATCH(pTHX_ PADOFFSET preverr) {
+static OP *S_newPREPARE_CATCH(pTHX_ PADOFFSET preverr) {
 	OP *op = newOP(OP_NULL, 0);
 	op->op_type = OP_CUSTOM;
-	op->op_ppaddr = xop_catch_impl;
+	op->op_ppaddr = xop_prepare_catch_impl;
 	op->op_targ = preverr;
 	return op;
 }
 
-#define newCATCH(a) S_newCATCH(aTHX_ a)
+#define newPREPARE_CATCH(a) S_newPREPARE_CATCH(aTHX_ a)
 
 /* RESTORE
  *
@@ -378,7 +378,7 @@ static int S_handle_try(pTHX_ OP **op_out) {
 		}
 
 		/* Push $@ to stack and reset it to the old value in one go. */
-		args = op_append_elem(OP_LIST, args, newCATCH(preverr));
+		args = op_append_elem(OP_LIST, args, newPREPARE_CATCH(preverr));
 
 		GV *invoke = gv_fetchpv("Try::Tiny::XS::invoke_catch", 0, SVt_PVCV);
 		assert(invoke != NULL);
@@ -408,7 +408,7 @@ static int S_handle_try(pTHX_ OP **op_out) {
 	OP *block = newLISTOP(OP_LEAVE, 0, newOP(OP_ENTER, 0), NULL);
 
 	/* Stash old value of $@. */
-	op_append_elem(block->op_type, block, newPREPARE(preverr));
+	op_append_elem(block->op_type, block, newPREPARE_TRY(preverr));
 
 	/* Reset success_flag to undef. */
 	op_append_elem(block->op_type, block, newRESET(success_flag));
@@ -472,15 +472,15 @@ BOOT:
 	XopENTRY_set(&xop_branch, xop_class, OA_LOGOP);
 	Perl_custom_op_register(aTHX_ xop_branch_impl, &xop_branch);
 
-	XopENTRY_set(&xop_prepare, xop_name, "xop_prepare");
-	XopENTRY_set(&xop_prepare, xop_desc, "localize $@ and $_");
-	XopENTRY_set(&xop_prepare, xop_class, OA_BASEOP);
-	Perl_custom_op_register(aTHX_ xop_prepare_impl, &xop_prepare);
+	XopENTRY_set(&xop_prepare_try, xop_name, "xop_prepare_try");
+	XopENTRY_set(&xop_prepare_try, xop_desc, "localize $@ and $_");
+	XopENTRY_set(&xop_prepare_try, xop_class, OA_BASEOP);
+	Perl_custom_op_register(aTHX_ xop_prepare_try_impl, &xop_prepare_try);
 
-	XopENTRY_set(&xop_catch, xop_name, "xop_catch");
-	XopENTRY_set(&xop_catch, xop_desc, "restore $@ before catch block");
-	XopENTRY_set(&xop_catch, xop_class, OA_BASEOP);
-	Perl_custom_op_register(aTHX_ xop_catch_impl, &xop_catch);
+	XopENTRY_set(&xop_prepare_catch, xop_name, "xop_prepare_catch");
+	XopENTRY_set(&xop_prepare_catch, xop_desc, "restore $@ before catch block");
+	XopENTRY_set(&xop_prepare_catch, xop_class, OA_BASEOP);
+	Perl_custom_op_register(aTHX_ xop_prepare_catch_impl, &xop_prepare_catch);
 
 	XopENTRY_set(&xop_reset, xop_name, "xop_reset");
 	XopENTRY_set(&xop_reset, xop_desc, "like undef but with a target");
