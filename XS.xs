@@ -6,6 +6,13 @@
 
 static Perl_keyword_plugin_t prev_plugin;
 
+/* SUCCESS
+ *
+ * Mark target as true if child returned via normal control flow.
+ *
+ * If child op does a non-local exit (via die or goto), do nothing.
+ */
+
 static XOP xop_success;
 
 static OP * xop_success_impl(pTHX) {
@@ -23,6 +30,11 @@ static OP *S_newSUCCESS(pTHX_ PADOFFSET target, OP *first) {
 }
 
 #define newSUCCESS(a,b) S_newSUCCESS(aTHX_ a,b)
+
+/* BRANCH
+ *
+ * Call the branch if target is false. Used to invoke catch block.
+ */
 
 static XOP xop_branch;
 
@@ -43,6 +55,12 @@ static OP *S_newBRANCH(pTHX_ PADOFFSET target, OP *first, OP *other) {
 
 #define newBRANCH(a,b,c) S_newBRANCH(aTHX_ a,b,c)
 
+/* PREPARE
+ *
+ * Prepare to enter try block. Localize $_ and $@, and copy $@ into target: we
+ * will need it to restore $@ before entering catch block.
+ */
+
 static XOP xop_prepare;
 
 static OP *xop_prepare_impl(pTHX) {
@@ -62,6 +80,12 @@ static OP *S_newPREPARE(pTHX_ PADOFFSET preverr) {
 }
 
 #define newPREPARE(a) S_newPREPARE(aTHX_ a)
+
+/* CATCH
+ *
+ * Prepare to execute catch block. Push $@ value to the stack and restore $@ to
+ * the value before try.
+ */
 
 static XOP xop_catch;
 
@@ -84,6 +108,11 @@ static OP *S_newCATCH(pTHX_ PADOFFSET preverr) {
 
 #define newCATCH(a) S_newCATCH(aTHX_ a)
 
+/* RESET
+ *
+ * Reset the success flag to false.
+ */
+
 static XOP xop_reset;
 
 static OP *xop_reset_impl(pTHX) {
@@ -102,6 +131,12 @@ static OP *S_newRESET(pTHX_ PADOFFSET targ) {
 
 #define newRESET(a) S_newRESET(aTHX_ a)
 
+
+/* RESTORE
+ *
+ * Restore $@ after entering try to the value before eval.
+ */
+
 static XOP xop_restore;
 
 static OP *xop_restore_impl(pTHX) {
@@ -119,6 +154,13 @@ static OP *S_newRESTORE(pTHX_ PADOFFSET targ) {
 }
 
 #define newRESTORE(a) S_newRESTORE(aTHX_ a)
+
+/* FINALLY
+ *
+ * Arrange to call finally blocks when we leave scope.
+ * Target points to an arrayref: we reserve first element to indicate
+ * exception, if any, followed by coderefs of the finally blocks themselves.
+ */
 
 static void invoke_finally(pTHX_ void *arg) {
 	dSP;
@@ -167,6 +209,12 @@ static OP *S_newFINALLY(pTHX_ PADOFFSET targ, OP *list) {
 
 #define newFINALLY(a,b) S_newFINALLY(aTHX_ a,b)
 
+/* FINALLY_SETERR
+ *
+ * Assign the error to the element 0 of finally list, which is reserved for
+ * this purpose by FINALLY.
+ */
+
 static XOP xop_finally_seterr;
 
 static OP *xop_finally_seterr_impl(pTHX) {
@@ -184,10 +232,37 @@ static OP *S_newFINALLY_SETERR(pTHX_ PADOFFSET targ) {
 
 #define newFINALLY_SETERR(a) S_newFINALLY_SETERR(aTHX_ a)
 
+/* SCOPE
+ *
+ * Scope contains the location of the success bit for the try block we are
+ * parsing now. Try blocks can be nested, so this is a stack of scopes
+ * actually, and `scope` always points to the currently parsed try block
+ * (innermost).
+ *
+ * This is used to patch RETURN ops to set the success bit as well as normal
+ * exit.
+ */
+
 static struct scope {
 	PADOFFSET target;
 	struct scope *prev;
 } *scope;
+
+/* KEYWORD PLUGIN
+ *
+ * Intercept `try` keyword and assemble an op-tree that behaves like a
+ * Try::Tiny would. Try block is inlined in the caller subroutine to avoid
+ * subroutine call overhead.
+ *
+ * To preserve the scalar/list context, instead of returning success value from
+ * eval directly, we use custom SUCCESS op wrapped around all return values
+ * (one around try block itself for implict return, and around arguments of all
+ * `return` operators within the block).
+ *
+ * For the same reason, catch block is called via a custom BRANCH op as well.
+ *
+ * Finally blocks are arranged to be called via a custom destructor.
+ */
 
 static int keyword_plugin(pTHX_ char *kw, STRLEN kwlen, OP **op_out) {
 	HV *hints = GvHV(PL_hintgv);
@@ -284,6 +359,9 @@ static int keyword_plugin(pTHX_ char *kw, STRLEN kwlen, OP **op_out) {
 		OP *eval = newUNOP(OP_ENTERTRY, 0, newSUCCESS(success, body));
 		OP *catch_maybe = newBRANCH(success, eval, catch);
 
+		/* newLOGOP will force scalar context on its children, while we
+		 * want to inherit the context of the outermost block.
+		 */
 		eval->op_flags &= ~OPf_WANT;
 		cUNOPx(eval)->op_first->op_flags &= ~OPf_WANT;
 
