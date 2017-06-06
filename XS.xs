@@ -261,9 +261,26 @@ static OP *S_newFINALLY_SETERR(pTHX_ PADOFFSET targ) {
  */
 
 static struct scope {
-	PADOFFSET target;
+	PADOFFSET success_flag;
 	struct scope *prev;
 } *scope;
+
+static void S_push_try_scope(pTHX_ PADOFFSET success_flag) {
+	struct scope *top;
+
+	Newx(top, 1, struct scope);
+	top->success_flag = success_flag;
+	top->prev = scope;
+	scope = top;
+}
+
+#define push_try_scope(a) S_push_try_scope(aTHX_ a)
+
+static void pop_try_scope(void) {
+	struct scope *top = scope;
+	scope = scope->prev;
+	Safefree(top);
+}
 
 /* KEYWORD PLUGIN
  *
@@ -290,18 +307,12 @@ static int keyword_plugin(pTHX_ char *kw, STRLEN kwlen, OP **op_out) {
 		PADOFFSET preverr = pad_alloc(OP_LEAVETRY, SVs_PADTMP);
 		PADOFFSET finaref = pad_alloc(OP_ANONLIST, SVs_PADTMP);
 
-		struct scope *top;
-
-		Newx(top, 1, struct scope);
-		top->target = success;
-		top->prev = scope;
-		scope = top;
+		push_try_scope(success);
 
 		OP *body = parse_block(0);
 		lex_read_space(0);
 
-		scope = top->prev;
-		Safefree(top);
+		pop_try_scope();
 
 		body = op_prepend_elem(OP_LINESEQ, newRESTORE(preverr), body);
 
@@ -391,7 +402,7 @@ static int keyword_plugin(pTHX_ char *kw, STRLEN kwlen, OP **op_out) {
 
 	if (is_enabled && strnEQ("return", kw, kwlen) && scope) {
 		OP *list = parse_listexpr(0);
-		OP *succ = newSUCCESS(scope->target, list);
+		OP *succ = newSUCCESS(scope->success_flag, list);
 		*op_out = newLISTOP(OP_RETURN, 0, succ, NULL);
 		return KEYWORD_PLUGIN_STMT;
 	}
