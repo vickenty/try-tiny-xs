@@ -298,6 +298,24 @@ static void pop_try_scope(void) {
  * Finally blocks are arranged to be called via a custom destructor.
  */
 
+static void S_parse_finally(pTHX_ OP **finlist) {
+	while (strnEQ("finally", PL_parser->bufptr, 7)) {
+		lex_read_to(PL_parser->bufptr + 7);
+		lex_read_space(0);
+
+		if (!*finlist) {
+			*finlist = newLISTOP(OP_ANONLIST, 0, newOP(OP_PUSHMARK, 0), NULL);
+		}
+
+		I32 floor = start_subparse(0, CVf_ANON);
+		OP *finop = newANONSUB(floor, NULL, parse_block(0));
+		*finlist = op_append_elem(OP_ANONLIST, *finlist, finop);
+		lex_read_space(0);
+	}
+}
+
+#define parse_finally(a) S_parse_finally(aTHX_ a)
+
 static int keyword_plugin(pTHX_ char *kw, STRLEN kwlen, OP **op_out) {
 	HV *hints = GvHV(PL_hintgv);
 	int is_enabled = hv_fetchs(GvHV(PL_hintgv), "Try::Tiny::XS/enabled", 0) != NULL;
@@ -321,18 +339,7 @@ static int keyword_plugin(pTHX_ char *kw, STRLEN kwlen, OP **op_out) {
 		op_append_elem(block->op_type, block, newRESET(success));
 
 		OP *finlist = NULL;
-		while (strnEQ("finally", PL_parser->bufptr, 7)) {
-			lex_read_to(PL_parser->bufptr + 7);
-			lex_read_space(0);
-
-			if (!finlist)
-				finlist = newLISTOP(OP_ANONLIST, 0, newOP(OP_PUSHMARK, 0), NULL);
-
-			I32 floor = start_subparse(0, CVf_ANON);
-			OP *finop = newANONSUB(floor, NULL, parse_block(0));
-			finlist = op_append_elem(OP_ANONLIST, finlist, finop);
-			lex_read_space(0);
-		}
+		parse_finally(&finlist);
 
 		OP *catch_cv = NULL;
 		if (strnEQ("catch", PL_parser->bufptr, 5)) {
@@ -344,18 +351,7 @@ static int keyword_plugin(pTHX_ char *kw, STRLEN kwlen, OP **op_out) {
 			lex_read_space(0);
 		}
 
-		while (strnEQ("finally", PL_parser->bufptr, 7)) {
-			lex_read_to(PL_parser->bufptr + 7);
-			lex_read_space(0);
-
-			if (!finlist)
-				finlist = newLISTOP(OP_ANONLIST, 0, newOP(OP_PUSHMARK, 0), NULL);
-
-			I32 floor = start_subparse(0, CVf_ANON);
-			OP *finop = newANONSUB(floor, NULL, parse_block(0));
-			finlist = op_append_elem(OP_ANONLIST, finlist, finop);
-			lex_read_space(0);
-		}
+		parse_finally(&finlist);
 
 		if (finlist) {
 			op_append_elem(block->op_type, block, newFINALLY(finaref, newUNOP(OP_SREFGEN, 0, finlist)));
