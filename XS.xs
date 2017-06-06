@@ -316,26 +316,24 @@ static void S_parse_finally(pTHX_ OP **finlist) {
 #define parse_finally(a) S_parse_finally(aTHX_ a)
 
 static int S_handle_try(pTHX_ OP **op_out) {
-	PADOFFSET success = pad_alloc(OP_ENTERTRY, SVs_PADTMP);
-	PADOFFSET preverr = pad_alloc(OP_LEAVETRY, SVs_PADTMP);
-	PADOFFSET finaref = pad_alloc(OP_ANONLIST, SVs_PADTMP);
+	/* Allocate storage for the success flag used to indicate whether eval
+	 * died or not. */
+	PADOFFSET success_flag = pad_alloc(OP_ENTERTRY, SVs_PADTMP);
 
-	push_try_scope(success);
-
+	/* Parse the body. Pass success_flag location to the custom 'return'
+	 * parser. */
+	push_try_scope(success_flag);
 	OP *body = parse_block(0);
+	pop_try_scope();
 	lex_read_space(0);
 
-	pop_try_scope();
-
-	body = op_prepend_elem(OP_LINESEQ, newRESTORE(preverr), body);
-
-	OP *block = newLISTOP(OP_LEAVE, 0, newOP(OP_ENTER, 0), NULL);
-	op_append_elem(block->op_type, block, newPREPARE(preverr));
-	op_append_elem(block->op_type, block, newRESET(success));
-
+	/* Finally can come before or after catch keyword. Parse those that are
+	 * before. 'finlist' is an op that builds a list of coderefs of finally
+	 * blocks. */
 	OP *finlist = NULL;
 	parse_finally(&finlist);
 
+	/* Parse catch block. Convert the catch block into a closure. */
 	OP *catch_cv = NULL;
 	if (strnEQ("catch", PL_parser->bufptr, 5)) {
 		lex_read_to(PL_parser->bufptr + 5);
@@ -346,44 +344,82 @@ static int S_handle_try(pTHX_ OP **op_out) {
 		lex_read_space(0);
 	}
 
+	/* Parse finally blocks that come after catch. */
 	parse_finally(&finlist);
 
+	/* Inside the try block, restore $@ to old value (eval resets to undef) */
+	PADOFFSET preverr = pad_alloc(OP_LEAVETRY, SVs_PADTMP);
+	body = op_prepend_elem(OP_LINESEQ, newRESTORE(preverr), body);
+
+	/* Put body inside eval. newUNOP expands just ENTERTRY into a
+	 * LEAVETRY/ENTERTRY pair automatically. */
+	OP *eval = newUNOP(OP_ENTERTRY, 0, newSUCCESS(success_flag, body));
+
+	/* Allocate storage for a list of finally closures. */
+	PADOFFSET finstate;
 	if (finlist) {
-		op_append_elem(block->op_type, block, newFINALLY(finaref, newUNOP(OP_SREFGEN, 0, finlist)));
+		finstate = pad_alloc(OP_ANONLIST, SVs_PADTMP);
 	}
 
+	/* Prepare code to run if eval fails. */
 	OP *catch;
 	if (catch_cv) {
-		GV *invoke = gv_fetchpv("Try::Tiny::XS::invoke_catch", 0, SVt_PVCV);
-		assert(invoke != NULL);
+		/* If there was a catch block, call via invoke_catch to
+		 * preserve scalar/list context and set the topicalizer at the
+		 * same time. */
 
 		OP *args = newLISTOP(OP_LIST, 0, catch_cv, NULL);
+
+		/* Sneak FINALLY_SETERR onto the arg list. It's not an argument
+		 * (does not touch the stack), but we put it here to make sure
+		 * it is called before PREPARE_CATCH clobbers $@. */
 		if (finlist) {
-			args = op_append_elem(OP_LIST, args, newFINALLY_SETERR(finaref));
+			args = op_append_elem(OP_LIST, args, newFINALLY_SETERR(finstate));
 		}
+
+		/* Push $@ to stack and reset it to the old value in one go. */
 		args = op_append_elem(OP_LIST, args, newCATCH(preverr));
+
+		GV *invoke = gv_fetchpv("Try::Tiny::XS::invoke_catch", 0, SVt_PVCV);
+		assert(invoke != NULL);
 		args = op_append_elem(OP_LIST, args, newUNOP(OP_RV2CV, 0, newGVOP(OP_GV, 0, invoke)));
 
 		catch = newUNOP(OP_ENTERSUB, OPf_STACKED, args);
 	}
-	else {
-		if (finlist) {
-			catch = newFINALLY_SETERR(finaref);
-		} else {
-			catch = newOP(OP_UNDEF, 0);
-		}
+	else if (finlist) {
+		/* If no catch block, but there was a finally block, we still
+		 * need to store the error to pass there. */
+		catch = newFINALLY_SETERR(finstate);
+	} else {
+		/* Otherwise just produce an undef value. */
+		catch = newOP(OP_UNDEF, 0);
 	}
 
-	OP *eval = newUNOP(OP_ENTERTRY, 0, newSUCCESS(success, body));
-	OP *catch_maybe = newBRANCH(success, eval, catch);
+	/* Combine eval with catch using custom branching op. */
+	OP *branch = newBRANCH(success_flag, eval, catch);
 
-	/* newLOGOP will force scalar context on its children, while we
-	 * want to inherit the context of the outermost block.
+	/* newLOGOP will force scalar context on its children, while we want to
+	 * inherit the context of the outermost block.
 	 */
 	eval->op_flags &= ~OPf_WANT;
 	cUNOPx(eval)->op_first->op_flags &= ~OPf_WANT;
 
-	op_append_elem(block->op_type, block, catch_maybe);
+	/* Whole try/catch/finally block. Scope for localized $_ and $@, and calling finally blocks via a destructor. */
+	OP *block = newLISTOP(OP_LEAVE, 0, newOP(OP_ENTER, 0), NULL);
+
+	/* Stash old value of $@. */
+	op_append_elem(block->op_type, block, newPREPARE(preverr));
+
+	/* Reset success_flag to undef. */
+	op_append_elem(block->op_type, block, newRESET(success_flag));
+
+	/* Prepare to call finally if any. */
+	if (finlist) {
+		op_append_elem(block->op_type, block, newFINALLY(finstate, newUNOP(OP_SREFGEN, 0, finlist)));
+	}
+
+	/* Block ends up with call to eval and branch to catch. */
+	op_append_elem(block->op_type, block, branch);
 
 	*op_out = block;
 
