@@ -315,90 +315,102 @@ static void S_parse_finally(pTHX_ OP **finlist) {
 
 #define parse_finally(a) S_parse_finally(aTHX_ a)
 
+static int S_handle_try(pTHX_ OP **op_out) {
+	PADOFFSET success = pad_alloc(OP_ENTERTRY, SVs_PADTMP);
+	PADOFFSET preverr = pad_alloc(OP_LEAVETRY, SVs_PADTMP);
+	PADOFFSET finaref = pad_alloc(OP_ANONLIST, SVs_PADTMP);
+
+	push_try_scope(success);
+
+	OP *body = parse_block(0);
+	lex_read_space(0);
+
+	pop_try_scope();
+
+	body = op_prepend_elem(OP_LINESEQ, newRESTORE(preverr), body);
+
+	OP *block = newLISTOP(OP_LEAVE, 0, newOP(OP_ENTER, 0), NULL);
+	op_append_elem(block->op_type, block, newPREPARE(preverr));
+	op_append_elem(block->op_type, block, newRESET(success));
+
+	OP *finlist = NULL;
+	parse_finally(&finlist);
+
+	OP *catch_cv = NULL;
+	if (strnEQ("catch", PL_parser->bufptr, 5)) {
+		lex_read_to(PL_parser->bufptr + 5);
+		lex_read_space(0);
+
+		I32 floor = start_subparse(0, CVf_ANON);
+		catch_cv = newANONSUB(floor, NULL, parse_block(0));
+		lex_read_space(0);
+	}
+
+	parse_finally(&finlist);
+
+	if (finlist) {
+		op_append_elem(block->op_type, block, newFINALLY(finaref, newUNOP(OP_SREFGEN, 0, finlist)));
+	}
+
+	OP *catch;
+	if (catch_cv) {
+		GV *invoke = gv_fetchpv("Try::Tiny::XS::invoke_catch", 0, SVt_PVCV);
+		assert(invoke != NULL);
+
+		OP *args = newLISTOP(OP_LIST, 0, catch_cv, NULL);
+		if (finlist) {
+			args = op_append_elem(OP_LIST, args, newFINALLY_SETERR(finaref));
+		}
+		args = op_append_elem(OP_LIST, args, newCATCH(preverr));
+		args = op_append_elem(OP_LIST, args, newUNOP(OP_RV2CV, 0, newGVOP(OP_GV, 0, invoke)));
+
+		catch = newUNOP(OP_ENTERSUB, OPf_STACKED, args);
+	}
+	else {
+		if (finlist) {
+			catch = newFINALLY_SETERR(finaref);
+		} else {
+			catch = newOP(OP_UNDEF, 0);
+		}
+	}
+
+	OP *eval = newUNOP(OP_ENTERTRY, 0, newSUCCESS(success, body));
+	OP *catch_maybe = newBRANCH(success, eval, catch);
+
+	/* newLOGOP will force scalar context on its children, while we
+	 * want to inherit the context of the outermost block.
+	 */
+	eval->op_flags &= ~OPf_WANT;
+	cUNOPx(eval)->op_first->op_flags &= ~OPf_WANT;
+
+	op_append_elem(block->op_type, block, catch_maybe);
+
+	*op_out = block;
+
+	return KEYWORD_PLUGIN_EXPR;
+}
+
+#define handle_try(a) S_handle_try(aTHX_ a)
+
+static int S_handle_return(pTHX_ OP **op_out) {
+	OP *list = parse_listexpr(0);
+	OP *succ = newSUCCESS(scope->success_flag, list);
+	*op_out = newLISTOP(OP_RETURN, 0, succ, NULL);
+	return KEYWORD_PLUGIN_STMT;
+}
+
+#define handle_return(a) S_handle_return(aTHX_ a)
+
 static int keyword_plugin(pTHX_ char *kw, STRLEN kwlen, OP **op_out) {
 	HV *hints = GvHV(PL_hintgv);
 	int is_enabled = hv_fetchs(GvHV(PL_hintgv), "Try::Tiny::XS/enabled", 0) != NULL;
 
 	if (is_enabled && strnEQ("try", kw, kwlen)) {
-		PADOFFSET success = pad_alloc(OP_ENTERTRY, SVs_PADTMP);
-		PADOFFSET preverr = pad_alloc(OP_LEAVETRY, SVs_PADTMP);
-		PADOFFSET finaref = pad_alloc(OP_ANONLIST, SVs_PADTMP);
-
-		push_try_scope(success);
-
-		OP *body = parse_block(0);
-		lex_read_space(0);
-
-		pop_try_scope();
-
-		body = op_prepend_elem(OP_LINESEQ, newRESTORE(preverr), body);
-
-		OP *block = newLISTOP(OP_LEAVE, 0, newOP(OP_ENTER, 0), NULL);
-		op_append_elem(block->op_type, block, newPREPARE(preverr));
-		op_append_elem(block->op_type, block, newRESET(success));
-
-		OP *finlist = NULL;
-		parse_finally(&finlist);
-
-		OP *catch_cv = NULL;
-		if (strnEQ("catch", PL_parser->bufptr, 5)) {
-			lex_read_to(PL_parser->bufptr + 5);
-			lex_read_space(0);
-
-			I32 floor = start_subparse(0, CVf_ANON);
-			catch_cv = newANONSUB(floor, NULL, parse_block(0));
-			lex_read_space(0);
-		}
-
-		parse_finally(&finlist);
-
-		if (finlist) {
-			op_append_elem(block->op_type, block, newFINALLY(finaref, newUNOP(OP_SREFGEN, 0, finlist)));
-		}
-
-		OP *catch;
-		if (catch_cv) {
-			GV *invoke = gv_fetchpv("Try::Tiny::XS::invoke_catch", 0, SVt_PVCV);
-			assert(invoke != NULL);
-
-			OP *args = newLISTOP(OP_LIST, 0, catch_cv, NULL);
-			if (finlist) {
-				args = op_append_elem(OP_LIST, args, newFINALLY_SETERR(finaref));
-			}
-			args = op_append_elem(OP_LIST, args, newCATCH(preverr));
-			args = op_append_elem(OP_LIST, args, newUNOP(OP_RV2CV, 0, newGVOP(OP_GV, 0, invoke)));
-
-			catch = newUNOP(OP_ENTERSUB, OPf_STACKED, args);
-		}
-		else {
-			if (finlist) {
-				catch = newFINALLY_SETERR(finaref);
-			} else {
-				catch = newOP(OP_UNDEF, 0);
-			}
-		}
-
-		OP *eval = newUNOP(OP_ENTERTRY, 0, newSUCCESS(success, body));
-		OP *catch_maybe = newBRANCH(success, eval, catch);
-
-		/* newLOGOP will force scalar context on its children, while we
-		 * want to inherit the context of the outermost block.
-		 */
-		eval->op_flags &= ~OPf_WANT;
-		cUNOPx(eval)->op_first->op_flags &= ~OPf_WANT;
-
-		op_append_elem(block->op_type, block, catch_maybe);
-
-		*op_out = block;
-
-		return KEYWORD_PLUGIN_EXPR;
+		return handle_try(op_out);
 	}
 
 	if (is_enabled && strnEQ("return", kw, kwlen) && scope) {
-		OP *list = parse_listexpr(0);
-		OP *succ = newSUCCESS(scope->success_flag, list);
-		*op_out = newLISTOP(OP_RETURN, 0, succ, NULL);
-		return KEYWORD_PLUGIN_STMT;
+		return handle_return(op_out);
 	}
 
 	if (prev_plugin) {
