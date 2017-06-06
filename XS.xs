@@ -8,9 +8,10 @@ static Perl_keyword_plugin_t prev_plugin;
 
 /* SUCCESS
  *
- * Mark target as true if child returned via normal control flow.
+ * Mark target as true if child returned via normal control flow. If child op
+ * does a non-local exit (via die or goto), do nothing.
  *
- * If child op does a non-local exit (via die or goto), do nothing.
+ * Target points to the success flag.
  */
 
 static XOP xop_success;
@@ -34,6 +35,8 @@ static OP *S_newSUCCESS(pTHX_ PADOFFSET target, OP *first) {
 /* BRANCH
  *
  * Call the branch if target is false. Used to invoke catch block.
+ *
+ * Target points to the success flag.
  */
 
 static XOP xop_branch;
@@ -59,6 +62,8 @@ static OP *S_newBRANCH(pTHX_ PADOFFSET target, OP *first, OP *other) {
  *
  * Prepare to enter try block. Localize $_ and $@, and copy $@ into target: we
  * will need it to restore $@ before entering catch block.
+ *
+ * Target points to a location to save $@ to.
  */
 
 static XOP xop_prepare;
@@ -84,6 +89,8 @@ static OP *S_newPREPARE(pTHX_ PADOFFSET preverr) {
 /* RESET
  *
  * Reset the success flag to false.
+ *
+ * Target points to the success flag.
  */
 
 static XOP xop_reset;
@@ -109,6 +116,8 @@ static OP *S_newRESET(pTHX_ PADOFFSET targ) {
  *
  * Prepare to execute catch block. Push $@ value to the stack and restore $@ to
  * the value before try.
+ *
+ * Target points to previously saved $@ value.
  */
 
 static XOP xop_catch;
@@ -135,6 +144,8 @@ static OP *S_newCATCH(pTHX_ PADOFFSET preverr) {
 /* RESTORE
  *
  * Restore $@ after entering try to the value before eval.
+ *
+ * Target points to previously saved $@ value.
  */
 
 static XOP xop_restore;
@@ -160,6 +171,10 @@ static OP *S_newRESTORE(pTHX_ PADOFFSET targ) {
  * Arrange to call finally blocks when we leave scope.
  * Target points to an arrayref: we reserve first element to indicate
  * exception, if any, followed by coderefs of the finally blocks themselves.
+ *
+ * Expects an arrayref of coderefs (finally blocks) at the top of the stack.
+ *
+ * Target points to a location that can be shared with FINALLY_SETERR.
  */
 
 static void invoke_finally(pTHX_ void *arg) {
@@ -213,6 +228,8 @@ static OP *S_newFINALLY(pTHX_ PADOFFSET targ, OP *list) {
  *
  * Assign the error to the element 0 of finally list, which is reserved for
  * this purpose by FINALLY.
+ *
+ * Target points to a location that was written to by FINALLY.
  */
 
 static XOP xop_finally_seterr;
