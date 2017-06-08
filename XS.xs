@@ -438,7 +438,6 @@ static int S_handle_return(pTHX_ OP **op_out) {
 #define handle_return(a) S_handle_return(aTHX_ a)
 
 static int keyword_plugin(pTHX_ char *kw, STRLEN kwlen, OP **op_out) {
-	HV *hints = GvHV(PL_hintgv);
 	int is_enabled = hv_fetchs(GvHV(PL_hintgv), "Try::Tiny::XS/enabled", 0) != NULL;
 
 	if (is_enabled && strnEQ("try", kw, kwlen)) {
