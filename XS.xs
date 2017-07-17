@@ -3,6 +3,7 @@
 #include "EXTERN.h"
 #include "perl.h"
 #include "XSUB.h"
+#include "compat.h"
 
 static Perl_keyword_plugin_t prev_plugin;
 
