@@ -191,7 +191,7 @@ static void invoke_finally(pTHX_ void *arg) {
 			XPUSHs(*err);
 			PUTBACK;
 		}
-		call_sv(*fin, G_VOID | G_EVAL | G_DISCARD);
+		call_sv(SvRV(*fin), G_VOID | G_EVAL | G_DISCARD);
 		SPAGAIN;
 		if (SvTRUE(ERRSV)) {
 		       warn(
@@ -308,7 +308,7 @@ static void S_parse_finally(pTHX_ OP **finlist) {
 		}
 
 		I32 floor = start_subparse(0, CVf_ANON);
-		OP *finop = newANONSUB(floor, NULL, parse_block(0));
+		OP *finop = newUNOP(OP_SREFGEN, 0, newANONSUB(floor, NULL, parse_block(0)));
 		*finlist = op_append_elem(OP_ANONLIST, *finlist, finop);
 		lex_read_space(0);
 	}
@@ -316,38 +316,7 @@ static void S_parse_finally(pTHX_ OP **finlist) {
 
 #define parse_finally(a) S_parse_finally(aTHX_ a)
 
-static int S_handle_try(pTHX_ OP **op_out) {
-	/* Allocate storage for the success flag used to indicate whether eval
-	 * died or not. */
-	PADOFFSET success_flag = pad_alloc(OP_ENTERTRY, SVs_PADTMP);
-
-	/* Parse the body. Pass success_flag location to the custom 'return'
-	 * parser. */
-	push_try_scope(success_flag);
-	OP *body = parse_block(0);
-	pop_try_scope();
-	lex_read_space(0);
-
-	/* Finally can come before or after catch keyword. Parse those that are
-	 * before. 'finlist' is an op that builds a list of coderefs of finally
-	 * blocks. */
-	OP *finlist = NULL;
-	parse_finally(&finlist);
-
-	/* Parse catch block. Convert the catch block into a closure. */
-	OP *catch_cv = NULL;
-	if (strnEQ("catch", PL_parser->bufptr, 5)) {
-		lex_read_to(PL_parser->bufptr + 5);
-		lex_read_space(0);
-
-		I32 floor = start_subparse(0, CVf_ANON);
-		catch_cv = newANONSUB(floor, NULL, parse_block(0));
-		lex_read_space(0);
-	}
-
-	/* Parse finally blocks that come after catch. */
-	parse_finally(&finlist);
-
+static OP *assemble_eval(OP *body, OP *catch_cv, OP *finlist, PADOFFSET success_flag) {
 	/* Inside the try block, restore $@ to old value (eval resets to undef) */
 	PADOFFSET preverr = pad_alloc(OP_LEAVETRY, SVs_PADTMP);
 	body = op_prepend_elem(OP_LINESEQ, newRESTORE(preverr), body);
@@ -422,7 +391,42 @@ static int S_handle_try(pTHX_ OP **op_out) {
 	/* Block ends up with call to eval and branch to catch. */
 	op_append_elem(block->op_type, block, branch);
 
-	*op_out = block;
+	return block;
+}
+
+static int S_handle_try(pTHX_ OP **op_out) {
+	/* Allocate storage for the success flag used to indicate whether eval
+	 * died or not. */
+	PADOFFSET success_flag = pad_alloc(OP_ENTERTRY, SVs_PADTMP);
+
+	/* Parse the body. Pass success_flag location to the custom 'return'
+	 * parser. */
+	push_try_scope(success_flag);
+	OP *body = parse_block(0);
+	pop_try_scope();
+	lex_read_space(0);
+
+	/* Finally can come before or after catch keyword. Parse those that are
+	 * before. 'finlist' is an op that builds a list of coderefs of finally
+	 * blocks. */
+	OP *finlist = NULL;
+	parse_finally(&finlist);
+
+	/* Parse catch block. Convert the catch block into a closure. */
+	OP *catch_cv = NULL;
+	if (strnEQ("catch", PL_parser->bufptr, 5)) {
+		lex_read_to(PL_parser->bufptr + 5);
+		lex_read_space(0);
+
+		I32 floor = start_subparse(0, CVf_ANON);
+		catch_cv = newUNOP(OP_SREFGEN, 0, newANONSUB(floor, NULL, parse_block(0)));
+		lex_read_space(0);
+	}
+
+	/* Parse finally blocks that come after catch. */
+	parse_finally(&finlist);
+
+	*op_out = assemble_eval(body, catch_cv, finlist, success_flag);
 
 	return KEYWORD_PLUGIN_EXPR;
 }
@@ -456,9 +460,102 @@ static int keyword_plugin(pTHX_ char *kw, STRLEN kwlen, OP **op_out) {
 	}
 }
 
+/*
+ * CALL CHECKER API
+ *
+ * Handle the case when function is called by a fully qualified name and
+ * keyword plugin does not trigger.
+ */
+
+static void install_check(const char *name, Perl_call_checker ckfun) {
+	CV *cv = get_cv(name, 0);
+	assert(cv != NULL);
+
+	cv_set_call_checker_flags(cv, ckfun, &PL_sv_undef, 0);
+}
+
+static OP *S_shift_args(pTHX_ OP *entersub) {
+	OP *list;
+	OP *pushmark;
+	OP *arg;
+
+	/* OP points to something similar to:
+	 * (entersub (ex-list pushmark arg0 ... $callee))
+	 *
+	 * We need to get srefgen out.
+	 */
+
+	list = cUNOPx(entersub)->op_first;
+	pushmark = cLISTOPx(list)->op_first;
+
+	if (OpSIBLING(pushmark) == cLISTOPx(list)->op_last) {
+		return NULL;
+	}
+
+	arg = op_sibling_splice(list, pushmark, 1, NULL);
+
+	assert(arg != NULL);
+
+	return arg;
+}
+
+#define shift_args(a) S_shift_args(aTHX_ a)
+
+static OP *S_bless_coderef_op(pTHX_ OP *op, SV *name_sv) {
+	return newLISTOP(OP_BLESS, 0, newUNOP(OP_SREFGEN, 0, op), newSVOP(OP_CONST, 0, name_sv));
+}
+
+#define bless_coderef_op(a, b) S_bless_coderef_op(aTHX_ a, b)
+
+static OP *check_try(pTHX_ OP *try_op, GV *namegv, SV *ckobj) {
+	PADOFFSET success_flag = pad_alloc(OP_ENTERTRY, SVs_PADTMP);
+
+	/* FIXME: Flatten arg lists.
+	 *
+	 * try($t, $c, $f, ...)
+	 * try($t, catch($c, finally ($f, ...)))
+	 *
+	 */
+	OP *body_sub = shift_args(try_op);
+	OP *catch_sub = shift_args(try_op);
+
+	OP *finlist = NULL;
+	OP *finally;
+	while ((finally = shift_args(try_op)) != NULL) {
+		if (finlist == NULL) {
+			finlist = newLISTOP(OP_ANONLIST, 0, newOP(OP_PUSHMARK, 0), NULL);
+		}
+		finlist = op_append_elem(OP_ANONLIST, finlist, finally);
+	}
+
+	OP *body = newUNOP(OP_ENTERSUB, 0, newUNOP(OP_RV2CV, 0, body_sub));
+
+	OP *eval = assemble_eval(body, catch_sub, finlist, pad_alloc(OP_ENTERTRY, SVs_PADTMP));
+
+	op_free(try_op);
+
+	return eval;
+}
+
+static OP *check_catch(pTHX_ OP *op, GV *namegv, SV *ckobj) {
+	OP *catch = shift_args(op);
+	op_free(op);
+	return bless_coderef_op(catch, newSVpvs("Try::Tiny::XS::Catch"));
+}
+
+static OP *check_finally(pTHX_ OP *op, GV *namegv, SV *ckobj) {
+	OP *finally = shift_args(op);
+	op_free(op);
+	return bless_coderef_op(finally, newSVpvs("Try::Tiny::XS::Finally"));
+}
+
 MODULE = Try::Tiny::XS		PACKAGE = Try::Tiny::XS
 
 BOOT:
+	install_check("Try::Tiny::XS::try", check_try);
+	install_check("Try::Tiny::XS::catch", check_catch);
+	install_check("Try::Tiny::XS::finally", check_finally);
+
 	prev_plugin = PL_keyword_plugin;
 	PL_keyword_plugin = keyword_plugin;
 
