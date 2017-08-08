@@ -316,7 +316,7 @@ static void S_parse_finally(pTHX_ OP **finlist) {
 
 #define parse_finally(a) S_parse_finally(aTHX_ a)
 
-static OP *assemble_eval(OP *body, OP *catch_cv, OP *finlist, PADOFFSET success_flag) {
+static OP *S_assemble_eval(pTHX_ OP *body, OP *catch_cv, OP *finlist, PADOFFSET success_flag) {
 	/* Inside the try block, restore $@ to old value (eval resets to undef) */
 	PADOFFSET preverr = pad_alloc(OP_LEAVETRY, SVs_PADTMP);
 	body = op_prepend_elem(OP_LINESEQ, newRESTORE(preverr), body);
@@ -394,6 +394,8 @@ static OP *assemble_eval(OP *body, OP *catch_cv, OP *finlist, PADOFFSET success_
 	return block;
 }
 
+#define assemble_eval(a, b, c, d) S_assemble_eval(aTHX_ a, b, c, d)
+
 static int S_handle_try(pTHX_ OP **op_out) {
 	/* Allocate storage for the success flag used to indicate whether eval
 	 * died or not. */
@@ -467,12 +469,14 @@ static int keyword_plugin(pTHX_ char *kw, STRLEN kwlen, OP **op_out) {
  * keyword plugin does not trigger.
  */
 
-static void install_check(const char *name, Perl_call_checker ckfun) {
+static void S_install_check(pTHX_ const char *name, Perl_call_checker ckfun) {
 	CV *cv = get_cv(name, 0);
 	assert(cv != NULL);
 
 	cv_set_call_checker_flags(cv, ckfun, &PL_sv_undef, 0);
 }
+
+#define install_check(a, b) S_install_check(aTHX_ a, b)
 
 static OP *S_shift_args(pTHX_ OP *entersub) {
 	OP *list;
