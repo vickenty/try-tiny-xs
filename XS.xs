@@ -5,8 +5,6 @@
 #include "XSUB.h"
 #include "compat.h"
 
-static Perl_keyword_plugin_t prev_plugin;
-
 /* SUCCESS
  *
  * Mark target as true if child returned via normal control flow. If child op
@@ -298,6 +296,8 @@ static void pop_try_scope(void) {
  * Finally blocks are arranged to be called via a custom destructor.
  */
 
+static Perl_keyword_plugin_t prev_plugin;
+
 static void S_parse_finally(pTHX_ OP **finlist) {
 	while (strnEQ("finally", PL_parser->bufptr, 7)) {
 		lex_read_to(PL_parser->bufptr + 7);
@@ -505,12 +505,6 @@ static OP *S_shift_args(pTHX_ OP *entersub) {
 
 #define shift_args(a) S_shift_args(aTHX_ a)
 
-static OP *S_bless_coderef_op(pTHX_ OP *op, SV *name_sv) {
-	return newLISTOP(OP_BLESS, 0, newUNOP(OP_SREFGEN, 0, op), newSVOP(OP_CONST, 0, name_sv));
-}
-
-#define bless_coderef_op(a, b) S_bless_coderef_op(aTHX_ a, b)
-
 static OP *check_try(pTHX_ OP *try_op, GV *namegv, SV *ckobj) {
 	PADOFFSET success_flag = pad_alloc(OP_ENTERTRY, SVs_PADTMP);
 
@@ -541,6 +535,12 @@ static OP *check_try(pTHX_ OP *try_op, GV *namegv, SV *ckobj) {
 	return eval;
 }
 
+static OP *S_bless_coderef_op(pTHX_ OP *op, SV *name_sv) {
+	return newLISTOP(OP_BLESS, 0, newUNOP(OP_SREFGEN, 0, op), newSVOP(OP_CONST, 0, name_sv));
+}
+
+#define bless_coderef_op(a, b) S_bless_coderef_op(aTHX_ a, b)
+
 static OP *check_catch(pTHX_ OP *op, GV *namegv, SV *ckobj) {
 	OP *catch = shift_args(op);
 	op_free(op);
@@ -552,6 +552,7 @@ static OP *check_finally(pTHX_ OP *op, GV *namegv, SV *ckobj) {
 	op_free(op);
 	return bless_coderef_op(finally, newSVpvs("Try::Tiny::XS::Finally"));
 }
+
 
 MODULE = Try::Tiny::XS		PACKAGE = Try::Tiny::XS
 
