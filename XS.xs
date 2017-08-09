@@ -478,79 +478,115 @@ static void S_install_check(pTHX_ const char *name, Perl_call_checker ckfun) {
 
 #define install_check(a, b) S_install_check(aTHX_ a, b)
 
-static OP *S_shift_args(pTHX_ OP *entersub) {
-	OP *list;
-	OP *pushmark;
-	OP *arg;
-
-	/* OP points to something similar to:
-	 * (entersub (ex-list pushmark arg0 ... $callee))
-	 *
-	 * We need to get srefgen out.
-	 */
-
-	list = cUNOPx(entersub)->op_first;
-	pushmark = cLISTOPx(list)->op_first;
-
-	if (OpSIBLING(pushmark) == cLISTOPx(list)->op_last) {
-		return NULL;
+static int S_op_is_blessed(pTHX_ OP *op, const char *require)
+{
+	if (!OP_TYPE_IS(op, OP_BLESS)) {
+		return 0;
 	}
 
-	arg = op_sibling_splice(list, pushmark, 1, NULL);
+	OP *class = cLISTOPx(op)->op_last;
 
-	assert(arg != NULL);
+	if (OP_TYPE_IS(class, OP_CONST)) {
+		STRLEN name_len;
+		char *name = SvPV(cSVOPx(class)->op_sv, name_len);
+		return strnEQ(name, require, name_len);
+	}
 
-	return arg;
+	return 0;
 }
+#define op_is_blessed(a, b) S_op_is_blessed(aTHX_ a, b)
 
-#define shift_args(a) S_shift_args(aTHX_ a)
+#define parse_args(a, b, c) S_parse_args(aTHX_ a, b, c)
+static void S_parse_args(pTHX_ OP *list, OP **catch, OP **finlist)
+{
+	OP *pushmark = cLISTOPx(list)->op_first;
+
+	while (1) {
+		OP *arg = op_sibling_splice(list, pushmark, 1, NULL);
+
+		if (arg == NULL) {
+			return;
+		}
+
+		else if (OP_TYPE_IS_OR_WAS(arg, OP_LIST)) {
+			parse_args(arg, catch, finlist);
+		}
+
+		else if (op_is_blessed(arg, "Try::Tiny::XS::Catch")) {
+			if (*catch != NULL) {
+				croak("multiple catch blocks");
+			}
+			*catch = arg;
+		}
+
+		else if (op_is_blessed(arg, "Try::Tiny::XS::Finally")) {
+			if (*finlist == NULL) {
+				*finlist = newLISTOP(OP_ANONLIST, 0, newOP(OP_PUSHMARK, 0), NULL);
+			}
+			op_append_elem(OP_ANONLIST, *finlist, arg);
+		}
+
+		else {
+			croak("unknown argument to try");
+		}
+	}
+}
 
 static OP *check_try(pTHX_ OP *try_op, GV *namegv, SV *ckobj) {
 	PADOFFSET success_flag = pad_alloc(OP_ENTERTRY, SVs_PADTMP);
 
-	/* FIXME: Flatten arg lists.
-	 *
-	 * try($t, $c, $f, ...)
-	 * try($t, catch($c, finally ($f, ...)))
-	 *
-	 */
-	OP *body_sub = shift_args(try_op);
-	OP *catch_sub = shift_args(try_op);
+	OP *arg_list = cUNOPx(try_op)->op_first;
+	OP *pushmark = cLISTOPx(arg_list)->op_first;
 
-	OP *finlist = NULL;
-	OP *finally;
-	while ((finally = shift_args(try_op)) != NULL) {
-		if (finlist == NULL) {
-			finlist = newLISTOP(OP_ANONLIST, 0, newOP(OP_PUSHMARK, 0), NULL);
-		}
-		finlist = op_append_elem(OP_ANONLIST, finlist, finally);
+	/* Remove callee ('try') from the arg list */
+	OP *last = OpSIBLING(pushmark);
+	while (OpSIBLING(OpSIBLING(last)) != NULL) {
+		last = OpSIBLING(last);
 	}
+	op_free(op_sibling_splice(arg_list, last, 1, NULL));
 
-	OP *body = newUNOP(OP_ENTERSUB, 0, newUNOP(OP_RV2CV, 0, body_sub));
+	OP *body = op_sibling_splice(arg_list, pushmark, 1, NULL);
 
-	OP *eval = assemble_eval(body, catch_sub, finlist, pad_alloc(OP_ENTERTRY, SVs_PADTMP));
+	OP *catch = NULL;
+	OP *finlist = NULL;
+
+
+	parse_args(arg_list, &catch, &finlist);
+
+	body = newUNOP(OP_ENTERSUB, 0, newUNOP(OP_RV2CV, 0, body));
+	OP *eval = assemble_eval(body, catch, finlist, pad_alloc(OP_ENTERTRY, SVs_PADTMP));
 
 	op_free(try_op);
 
 	return eval;
 }
 
-static OP *S_bless_coderef_op(pTHX_ OP *op, SV *name_sv) {
-	return newLISTOP(OP_BLESS, 0, newUNOP(OP_SREFGEN, 0, op), newSVOP(OP_CONST, 0, name_sv));
+static OP *S_convert_bless(pTHX_ OP *entersub, SV *name_sv) {
+	OP *arg_list = cLISTOPx(entersub)->op_first;
+	OP *pushmark = cLISTOPx(arg_list)->op_first;
+
+	OP *list = newLISTOP(OP_LIST, 0, NULL, NULL);
+	OP *body = op_sibling_splice(arg_list, pushmark, 1, NULL);
+	OP *bless = newLISTOP(OP_BLESS, 0, newUNOP(OP_SREFGEN, 0, body), newSVOP(OP_CONST, 0, name_sv));
+
+	list = op_append_elem(OP_LIST, list, bless);
+
+	while (OpSIBLING(OpSIBLING(pushmark)) != NULL) {
+		OP *arg = op_sibling_splice(arg_list, pushmark, 1, NULL);
+		list = op_append_elem(OP_LIST, list, arg);
+	}
+
+	return list;
 }
 
-#define bless_coderef_op(a, b) S_bless_coderef_op(aTHX_ a, b)
+#define convert_bless(a, b) S_convert_bless(aTHX_ a, b)
 
 static OP *check_catch(pTHX_ OP *op, GV *namegv, SV *ckobj) {
-	OP *catch = shift_args(op);
-	op_free(op);
-	return bless_coderef_op(catch, newSVpvs("Try::Tiny::XS::Catch"));
+	return convert_bless(op, newSVpvs("Try::Tiny::XS::Catch"));
 }
 
 static OP *check_finally(pTHX_ OP *op, GV *namegv, SV *ckobj) {
-	OP *finally = shift_args(op);
-	op_free(op);
-	return bless_coderef_op(finally, newSVpvs("Try::Tiny::XS::Finally"));
+	return convert_bless(op, newSVpvs("Try::Tiny::XS::Finally"));
 }
 
 
