@@ -21,6 +21,7 @@ static OP * xop_success_impl(pTHX) {
 	return NORMAL;
 }
 
+#define newSUCCESS(a,b) S_newSUCCESS(aTHX_ a,b)
 static OP *S_newSUCCESS(pTHX_ PADOFFSET target, OP *first) {
 	OP *op = newUNOP(OP_NULL, OPf_WANT_VOID, first);
 	op->op_type = OP_CUSTOM;
@@ -28,8 +29,6 @@ static OP *S_newSUCCESS(pTHX_ PADOFFSET target, OP *first) {
 	op->op_targ = target;
 	return op;
 }
-
-#define newSUCCESS(a,b) S_newSUCCESS(aTHX_ a,b)
 
 /* BRANCH
  *
@@ -48,14 +47,13 @@ static OP * xop_branch_impl(pTHX) {
 	return NORMAL;
 }
 
+#define newBRANCH(a,b,c) S_newBRANCH(aTHX_ a,b,c)
 static OP *S_newBRANCH(pTHX_ PADOFFSET target, OP *first, OP *other) {
 	OP *op = newLOGOP(OP_CUSTOM, 0, first, other);
 	cUNOPx(op)->op_first->op_ppaddr = xop_branch_impl;
 	cUNOPx(op)->op_first->op_targ = target;
 	return op;
 }
-
-#define newBRANCH(a,b,c) S_newBRANCH(aTHX_ a,b,c)
 
 /* PREPARE
  *
@@ -75,6 +73,7 @@ static OP *xop_prepare_try_impl(pTHX) {
 	return NORMAL;
 }
 
+#define newPREPARE_TRY(a) S_newPREPARE_TRY(aTHX_ a)
 static OP *S_newPREPARE_TRY(pTHX_ PADOFFSET preverr) {
 	OP *op = newOP(OP_NULL, 0);
 	op->op_type = OP_CUSTOM;
@@ -82,8 +81,6 @@ static OP *S_newPREPARE_TRY(pTHX_ PADOFFSET preverr) {
 	op->op_targ = preverr;
 	return op;
 }
-
-#define newPREPARE_TRY(a) S_newPREPARE_TRY(aTHX_ a)
 
 /* RESET
  *
@@ -100,6 +97,7 @@ static OP *xop_reset_impl(pTHX) {
 	return NORMAL;
 }
 
+#define newRESET(a) S_newRESET(aTHX_ a)
 static OP *S_newRESET(pTHX_ PADOFFSET targ) {
 	OP *op = newOP(OP_NULL, 0);
 	op->op_type = OP_CUSTOM;
@@ -107,8 +105,6 @@ static OP *S_newRESET(pTHX_ PADOFFSET targ) {
 	op->op_targ = targ;
 	return op;
 }
-
-#define newRESET(a) S_newRESET(aTHX_ a)
 
 /* CATCH
  *
@@ -129,6 +125,7 @@ static OP *xop_prepare_catch_impl(pTHX) {
 	return NORMAL;
 }
 
+#define newPREPARE_CATCH(a) S_newPREPARE_CATCH(aTHX_ a)
 static OP *S_newPREPARE_CATCH(pTHX_ PADOFFSET preverr) {
 	OP *op = newOP(OP_NULL, 0);
 	op->op_type = OP_CUSTOM;
@@ -136,8 +133,6 @@ static OP *S_newPREPARE_CATCH(pTHX_ PADOFFSET preverr) {
 	op->op_targ = preverr;
 	return op;
 }
-
-#define newPREPARE_CATCH(a) S_newPREPARE_CATCH(aTHX_ a)
 
 /* RESTORE
  *
@@ -154,6 +149,7 @@ static OP *xop_restore_impl(pTHX) {
 	return NORMAL;
 }
 
+#define newRESTORE(a) S_newRESTORE(aTHX_ a)
 static OP *S_newRESTORE(pTHX_ PADOFFSET targ) {
 	OP *op = newOP(OP_NULL, 0);
 	op->op_type = OP_CUSTOM;
@@ -161,8 +157,6 @@ static OP *S_newRESTORE(pTHX_ PADOFFSET targ) {
 	op->op_targ = targ;
 	return op;
 }
-
-#define newRESTORE(a) S_newRESTORE(aTHX_ a)
 
 /* FINALLY
  *
@@ -213,14 +207,13 @@ static OP *xop_finally_impl(pTHX) {
 	return NORMAL;
 }
 
+#define newFINALLY(a,b) S_newFINALLY(aTHX_ a,b)
 static OP *S_newFINALLY(pTHX_ PADOFFSET targ, OP *list) {
 	OP *op = newUNOP(OP_CUSTOM, 0, list);
 	op->op_ppaddr = xop_finally_impl;
 	op->op_targ = targ;
 	return op;
 }
-
-#define newFINALLY(a,b) S_newFINALLY(aTHX_ a,b)
 
 /* FINALLY_SETERR
  *
@@ -263,6 +256,7 @@ static struct scope {
 	struct scope *prev;
 } *scope;
 
+#define push_try_scope(a) S_push_try_scope(aTHX_ a)
 static void S_push_try_scope(pTHX_ PADOFFSET success_flag) {
 	struct scope *top;
 
@@ -271,8 +265,6 @@ static void S_push_try_scope(pTHX_ PADOFFSET success_flag) {
 	top->prev = scope;
 	scope = top;
 }
-
-#define push_try_scope(a) S_push_try_scope(aTHX_ a)
 
 static void pop_try_scope(void) {
 	struct scope *top = scope;
@@ -298,6 +290,7 @@ static void pop_try_scope(void) {
 
 static Perl_keyword_plugin_t prev_plugin;
 
+#define parse_finally(a) S_parse_finally(aTHX_ a)
 static void S_parse_finally(pTHX_ OP **finlist) {
 	while (strnEQ("finally", PL_parser->bufptr, 7)) {
 		lex_read_to(PL_parser->bufptr + 7);
@@ -314,8 +307,8 @@ static void S_parse_finally(pTHX_ OP **finlist) {
 	}
 }
 
-#define parse_finally(a) S_parse_finally(aTHX_ a)
 
+#define assemble_eval(a, b, c, d) S_assemble_eval(aTHX_ a, b, c, d)
 static OP *S_assemble_eval(pTHX_ OP *body, OP *catch_cv, OP *finlist, PADOFFSET success_flag) {
 	/* Inside the try block, restore $@ to old value (eval resets to undef) */
 	PADOFFSET preverr = pad_alloc(OP_LEAVETRY, SVs_PADTMP);
@@ -394,8 +387,8 @@ static OP *S_assemble_eval(pTHX_ OP *body, OP *catch_cv, OP *finlist, PADOFFSET 
 	return block;
 }
 
-#define assemble_eval(a, b, c, d) S_assemble_eval(aTHX_ a, b, c, d)
 
+#define handle_try(a) S_handle_try(aTHX_ a)
 static int S_handle_try(pTHX_ OP **op_out) {
 	/* Allocate storage for the success flag used to indicate whether eval
 	 * died or not. */
@@ -433,16 +426,13 @@ static int S_handle_try(pTHX_ OP **op_out) {
 	return KEYWORD_PLUGIN_EXPR;
 }
 
-#define handle_try(a) S_handle_try(aTHX_ a)
-
+#define handle_return(a) S_handle_return(aTHX_ a)
 static int S_handle_return(pTHX_ OP **op_out) {
 	OP *list = parse_listexpr(0);
 	OP *succ = newSUCCESS(scope->success_flag, list);
 	*op_out = newLISTOP(OP_RETURN, 0, succ, NULL);
 	return KEYWORD_PLUGIN_STMT;
 }
-
-#define handle_return(a) S_handle_return(aTHX_ a)
 
 static int keyword_plugin(pTHX_ char *kw, STRLEN kwlen, OP **op_out) {
 	int is_enabled = hv_fetchs(GvHV(PL_hintgv), "Try::Tiny::XS/enabled", 0) != NULL;
@@ -469,6 +459,7 @@ static int keyword_plugin(pTHX_ char *kw, STRLEN kwlen, OP **op_out) {
  * keyword plugin does not trigger.
  */
 
+#define install_check(a, b) S_install_check(aTHX_ a, b)
 static void S_install_check(pTHX_ const char *name, Perl_call_checker ckfun) {
 	CV *cv = get_cv(name, 0);
 	assert(cv != NULL);
@@ -476,8 +467,8 @@ static void S_install_check(pTHX_ const char *name, Perl_call_checker ckfun) {
 	cv_set_call_checker_flags(cv, ckfun, &PL_sv_undef, 0);
 }
 
-#define install_check(a, b) S_install_check(aTHX_ a, b)
 
+#define op_is_blessed(a, b) S_op_is_blessed(aTHX_ a, b)
 static int S_op_is_blessed(pTHX_ OP *op, const char *require)
 {
 	if (!OP_TYPE_IS(op, OP_BLESS)) {
@@ -494,7 +485,6 @@ static int S_op_is_blessed(pTHX_ OP *op, const char *require)
 
 	return 0;
 }
-#define op_is_blessed(a, b) S_op_is_blessed(aTHX_ a, b)
 
 #define parse_args(a, b, c) S_parse_args(aTHX_ a, b, c)
 static void S_parse_args(pTHX_ OP *list, OP **catch, OP **finlist)
@@ -561,6 +551,7 @@ static OP *check_try(pTHX_ OP *try_op, GV *namegv, SV *ckobj) {
 	return eval;
 }
 
+#define convert_bless(a, b) S_convert_bless(aTHX_ a, b)
 static OP *S_convert_bless(pTHX_ OP *entersub, SV *name_sv) {
 	OP *arg_list = cLISTOPx(entersub)->op_first;
 	OP *pushmark = cLISTOPx(arg_list)->op_first;
@@ -578,8 +569,6 @@ static OP *S_convert_bless(pTHX_ OP *entersub, SV *name_sv) {
 
 	return list;
 }
-
-#define convert_bless(a, b) S_convert_bless(aTHX_ a, b)
 
 static OP *check_catch(pTHX_ OP *op, GV *namegv, SV *ckobj) {
 	return convert_bless(op, newSVpvs("Try::Tiny::XS::Catch"));
